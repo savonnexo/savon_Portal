@@ -2412,6 +2412,9 @@ function cancelTimeOff(id) {
   showToast('Request cancelled', 'success');
 }
 
+let tastingSort = 'date', tastingDir = 'asc';
+let tastingFilter = { tf: 'all', loc: '', search: '' };
+
 function renderTastings(host) {
   const u = currentUser();
   if (!u.tastingAccess && u.role !== 'admin') {
@@ -2452,24 +2455,24 @@ function renderTastings(host) {
       <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: end;">
         <div class="field" style="flex: 2; min-width: 200px;">
           <label class="label">Search</label>
-          <input id="tasting-search" placeholder="Supplier, distributor, product..." oninput="renderView()">
+          <input id="tasting-search" placeholder="Supplier, distributor, product..." value="${tastingFilter.search}" oninput="tastingFilter.search=this.value; renderTastingTable()">
         </div>
         <div class="field" style="flex: 1; min-width: 160px;">
           <label class="label">Location</label>
-          <select id="tasting-location" onchange="renderView()">
+          <select id="tasting-location" onchange="tastingFilter.loc=this.value; renderTastingTable()">
             <option value="">All</option>
-            ${[...new Set(DB.tastings.map(t => t.location).filter(Boolean))].sort().map(l => `<option>${escapeHtml(l)}</option>`).join('')}
+            ${[...new Set(DB.tastings.map(t => t.location).filter(Boolean))].sort().map(l => `<option ${tastingFilter.loc===l?'selected':''}>${escapeHtml(l)}</option>`).join('')}
           </select>
         </div>
         <div class="field" style="flex: 1; min-width: 140px;">
           <label class="label">Time Frame</label>
-          <select id="tasting-tf" onchange="renderView()">
-            <option value="upcoming">Upcoming</option>
-            <option value="this-week">This Week</option>
-            <option value="next-week">Next Week</option>
-            <option value="this-month">This Month</option>
-            <option value="past">Past</option>
-            <option value="all">All Time</option>
+          <select id="tasting-tf" onchange="tastingFilter.tf=this.value; renderTastingTable()">
+            <option value="upcoming" ${tastingFilter.tf==='upcoming'?'selected':''}>Upcoming</option>
+            <option value="this-week" ${tastingFilter.tf==='this-week'?'selected':''}>This Week</option>
+            <option value="next-week" ${tastingFilter.tf==='next-week'?'selected':''}>Next Week</option>
+            <option value="this-month" ${tastingFilter.tf==='this-month'?'selected':''}>This Month</option>
+            <option value="past" ${tastingFilter.tf==='past'?'selected':''}>Past</option>
+            <option value="all" ${tastingFilter.tf==='all'?'selected':''}>All Time</option>
           </select>
         </div>
       </div>
@@ -2482,9 +2485,9 @@ function renderTastings(host) {
 
 function renderTastingTable() {
   const u = currentUser();
-  const search = (document.getElementById('tasting-search')?.value || '').toLowerCase().trim();
-  const loc = document.getElementById('tasting-location')?.value || '';
-  const tf = document.getElementById('tasting-tf')?.value || 'upcoming';
+  const search = tastingFilter.search.toLowerCase().trim();
+  const loc = tastingFilter.loc;
+  const tf = tastingFilter.tf;
   const today = todayISO(); const wk = getWeekRange(); const nk = getWeekRange(1);
 
   let items = DB.tastings.filter(t => {
