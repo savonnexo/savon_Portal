@@ -2413,7 +2413,7 @@ function cancelTimeOff(id) {
 }
 
 let tastingSort = 'date', tastingDir = 'asc';
-let tastingFilter = { tf: 'all', loc: '', search: '' };
+let tastingFilter = { tf: 'upcoming', loc: '', search: '' };
 
 function renderTastings(host) {
   const u = currentUser();
@@ -2427,11 +2427,17 @@ function renderTastings(host) {
         <div class="page-title">🍷 Tasting Schedule</div>
         <div class="page-subtitle">Manage and export upcoming tastings</div>
       </div>
-      <div class="page-actions">
-        <button class="btn btn-primary" onclick="openTastingModal()">＋ Add Tasting</button>
-        <button class="btn btn-gold" onclick="exportTastings('this')">📥 This Week</button>
-        <button class="btn btn-gold" onclick="exportTastings('next')">📥 Next Week</button>
-        <button class="btn btn-outline" onclick="openExportTastingLocation()">📍 By Location</button>
+      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:8px;">
+        <div class="page-actions">
+          <button class="btn btn-primary" onclick="openTastingModal()">＋ Add Tasting</button>
+          ${(u.role==='admin'||u.role==='manager') ? `<button class="btn btn-secondary" onclick="document.getElementById('sheet-import-input').click()">📂 Import from Sheet</button>
+          <input type="file" id="sheet-import-input" accept=".xlsx,.xls" style="display:none" onchange="importTastingSheet(this)">` : ''}
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-gold" onclick="exportTastings('this')">📥 This Week</button>
+          <button class="btn btn-gold" onclick="exportTastings('next')">📥 Next Week</button>
+          <button class="btn btn-outline" onclick="openExportTastingLocation()">📍 By Location</button>
+        </div>
       </div>
     </div>
 
@@ -2638,6 +2644,127 @@ function deleteTasting(id) {
   _sbDelete('tastings', id);
   renderView();
   showToast('Tasting deleted', 'success');
+}
+
+// ============ IMPORT FROM GOOGLE SHEET (Excel) ============
+function importTastingSheet(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = ''; // reset so same file can be re-imported
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: true });
+      const sheetNames = ['ChesterTwin Oaks', 'Edwardsville Waterlou'];
+      const parsed = [];
+
+      function excelDate(v) {
+        if (!v) return '';
+        if (v instanceof Date) return v.getFullYear() + '-' + String(v.getMonth()+1).padStart(2,'0') + '-' + String(v.getDate()).padStart(2,'0');
+        if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) return v.slice(0,10);
+        return '';
+      }
+      function excelTime(v) {
+        if (!v) return '';
+        if (v instanceof Date) return String(v.getHours()).padStart(2,'0') + ':' + String(v.getMinutes()).padStart(2,'0');
+        if (typeof v === 'number' && v < 1) {
+          const mins = Math.round(v * 1440);
+          return String(Math.floor(mins/60)).padStart(2,'0') + ':' + String(mins%60).padStart(2,'0');
+        }
+        if (typeof v === 'string' && /^\d{1,2}:\d{2}/.test(v)) return v.slice(0,5);
+        return '';
+      }
+      function stableId(date, loc, from) {
+        return 't_' + date + '_' + (loc||'').toLowerCase().replace(/[^a-z0-9]/g,'_') + '_' + (from||'').replace(':','');
+      }
+
+      sheetNames.forEach(name => {
+        const ws = wb.Sheets[name];
+        if (!ws) return;
+        // Headers in row 2, data from row 3 (0-indexed: headers at index 1, data from index 2)
+        const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, cellDates: true, defval: '' });
+        const headers = rows[1] || [];
+        // Detect if this sheet has a Rep column (Edwardsville has Rep at col 7, products at 8-13)
+        const hasRep = (headers[7] || '').toString().toLowerCase().includes('rep');
+        const prodStart = hasRep ? 8 : 7;
+
+        rows.slice(2).forEach(row => {
+          const rawDate = row[0];
+          if (!rawDate) return;
+          const date = excelDate(rawDate instanceof Date ? rawDate : new Date(rawDate));
+          if (!date || date < '2020-01-01') return; // skip invalid/empty
+          const loc   = (row[1] || '').trim();
+          const day   = (row[2] || '').trim();
+          const from  = excelTime(row[3] instanceof Date ? row[3] : row[3]);
+          const to    = excelTime(row[4] instanceof Date ? row[4] : row[4]);
+          const dist  = (row[5] || '').trim();
+          const supp  = (row[6] || '').trim();
+          const rep   = hasRep ? (row[7] || '').trim() : '';
+          const prods = [];
+          for (let p = prodStart; p < prodStart + 6; p++) {
+            const v = (row[p] || '').toString().trim();
+            if (v) prods.push(v);
+          }
+          if (!loc && !dist && !supp) return; // skip blank rows
+          parsed.push({
+            id: stableId(date, loc, from),
+            date, day: day || fmtDay(date),
+            from, to,
+            location: loc, distributor: dist, supplier: supp, rep,
+            products: prods
+          });
+        });
+      });
+
+      if (parsed.length === 0) { showToast('No valid rows found in file', 'error'); return; }
+
+      // Show confirmation modal
+      showModal({
+        title: '📂 Import Tasting Sheet',
+        body: `
+          <div style="text-align:center; padding: 12px 0;">
+            <div style="font-size: 48px; margin-bottom: 12px;">📊</div>
+            <div style="font-size: 22px; font-weight: 700; color: var(--ink); margin-bottom: 6px;">${parsed.length} tastings found</div>
+            <div style="color: var(--slate); font-size: 14px; margin-bottom: 20px;">
+              From sheets: <strong>ChesterTwin Oaks</strong> &amp; <strong>Edwardsville Waterlou</strong><br>
+              Existing tastings with the same date, location &amp; time will be updated. New ones will be added.
+            </div>
+            <div style="background: var(--warning-light); border-radius: 8px; padding: 12px; font-size: 13px; color: var(--warning); text-align: left;">
+              ⚠️ This will replace any matching records already in the portal.
+            </div>
+          </div>`,
+        submitLabel: 'Import ' + parsed.length + ' Tastings',
+        submitFn: () => { closeModal(); doImportTastings(parsed); }
+      });
+    } catch(err) {
+      showToast('Error reading file: ' + err.message, 'error');
+      console.error(err);
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function doImportTastings(rows) {
+  showLoadingOverlay('Importing ' + rows.length + ' tastings…');
+  try {
+    // Upsert in batches of 200 to stay within Supabase limits
+    const batchSize = 200;
+    for (let i = 0; i < rows.length; i += batchSize) {
+      const batch = rows.slice(i, i + batchSize).map(_toDB.tastings);
+      const { error } = await _sb.from('tastings').upsert(batch, { onConflict: 'id' });
+      if (error) throw new Error(error.message);
+    }
+    // Reload tastings from Supabase
+    const { data, error: fetchErr } = await _sb.from('tastings').select('*');
+    if (fetchErr) throw new Error(fetchErr.message);
+    DB.tastings = (data || []).map(_fromDB.tastings);
+    hideLoadingOverlay();
+    showToast('✅ Imported ' + rows.length + ' tastings successfully', 'success');
+    renderView();
+  } catch(err) {
+    hideLoadingOverlay();
+    showToast('Import error: ' + err.message, 'error');
+  }
 }
 
 function exportTastings(which) {
