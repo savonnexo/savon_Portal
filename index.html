@@ -7,6 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
 /* ============ SAVON NEXO THEME — v0.1 ============ */
 :root {
@@ -851,6 +852,7 @@ tbody tr:hover { background: var(--brand-red-pale); }
 .toast.show { transform: translateY(0); }
 .toast.success { background: var(--success); }
 .toast.error { background: var(--danger); }
+.toast.info { background: var(--info); }
 
 /* ============ TASTING PILL ============ */
 .product-pill {
@@ -1146,28 +1148,60 @@ tbody tr:hover { background: var(--brand-red-pale); }
   gap: 16px;
   margin-top: 18px;
   position: relative;
-  padding-top: 22px;
-  flex-wrap: wrap;
+  padding-top: 40px;
   justify-content: center;
 }
+/* Vertical stem from parent down to the horizontal junction */
 .org-children::before {
   content: '';
   position: absolute;
   top: 0;
   left: 50%;
+  transform: translateX(-50%);
   width: 2px;
-  height: 18px;
+  height: 20px;
   background: var(--brand-red);
+  z-index: 1;
 }
+/* Each child: vertical drop from junction line down to node */
 .org-children > .org-node-wrap::before {
   content: '';
   position: absolute;
-  top: -22px;
+  top: -20px;
   left: 50%;
   transform: translateX(-50%);
   width: 2px;
-  height: 18px;
+  height: 20px;
   background: var(--brand-red);
+  z-index: 1;
+}
+/* Each child: horizontal segment of the junction bar
+   First child  → line from its center rightward to the gap midpoint
+   Last child   → line from gap midpoint leftward to its center
+   Middle child → line spanning across both gap midpoints
+   Only child   → no horizontal line (single straight drop) */
+.org-children > .org-node-wrap::after {
+  content: '';
+  position: absolute;
+  top: -20px;
+  height: 2px;
+  background: var(--brand-red);
+  z-index: 1;
+}
+.org-children > .org-node-wrap:only-child::after {
+  display: none;
+}
+.org-children > .org-node-wrap:first-child:not(:only-child)::after {
+  left: 50%;
+  right: -8px;
+}
+.org-children > .org-node-wrap:last-child:not(:only-child)::after {
+  left: -8px;
+  right: 50%;
+}
+.org-children > .org-node-wrap:not(:first-child):not(:last-child)::after {
+  left: -8px;
+  right: -8px;
 }
 
 /* ============ TIMESHEET INPUTS ============ */
@@ -1210,6 +1244,60 @@ const _sb = supabase.createClient(
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im90a2h6a3BsZ3Btamx5enNwb3l3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk4Mjg5MTIsImV4cCI6MjA5NTQwNDkxMn0.mTrmyg_a2Blh4DxnORlzQT_bQscJ3rm4II7DRO_yM7Y'
 );
 
+// ============ EMAIL CONFIG (EmailJS) ============
+// Sign up free at https://www.emailjs.com → connect Zoho SMTP → create templates
+// Then fill in the values below.
+const EMAIL_CFG = {
+  publicKey:            'YOUR_EMAILJS_PUBLIC_KEY',      // Account → API Keys
+  serviceId:            'YOUR_EMAILJS_SERVICE_ID',      // Email Services tab
+  templateApproval:     'YOUR_TEMPLATE_ID_APPROVAL',    // template for tasting approval requests
+  templateAnnouncement: 'YOUR_TEMPLATE_ID_ANNOUNCEMENT',// template for announcement blasts
+  fromEmail:            'info@savonnexo.com',
+  approverEmail:        'portia.sorden@savonnexo.com',  // Portia's email — update if different
+  portalUrl:            'https://portal.savonnexo.com', // live URL
+};
+// Init EmailJS (safe to call even before templates are configured)
+try { emailjs.init({ publicKey: EMAIL_CFG.publicKey }); } catch(e) {}
+
+async function sendEmail(templateId, params) {
+  if (EMAIL_CFG.publicKey === 'YOUR_EMAILJS_PUBLIC_KEY') return; // not configured yet
+  try {
+    await emailjs.send(EMAIL_CFG.serviceId, templateId, { from_email: EMAIL_CFG.fromEmail, ...params });
+  } catch(e) { console.warn('Email send failed:', e); }
+}
+
+// Send tasting approval request email to Portia
+async function emailTastingApproval(tasting, submitterName) {
+  await sendEmail(EMAIL_CFG.templateApproval, {
+    to_email:      EMAIL_CFG.approverEmail,
+    to_name:       'Portia',
+    submitter:     submitterName,
+    tasting_date:  fmtDate(tasting.date),
+    tasting_loc:   tasting.location,
+    tasting_time:  fmtTimeRange(tasting.from, tasting.to),
+    distributor:   tasting.distributor || '—',
+    supplier:      tasting.supplier || '—',
+    products:      (tasting.products||[]).join(', ') || '—',
+    approval_url:  EMAIL_CFG.portalUrl + '#tastingapprovals',
+  });
+}
+
+// Send announcement email blast to all active employees
+async function emailAnnouncement(announcement, authorName) {
+  const activeEmails = DB.users.filter(u => u.active && u.email).map(u => u.email);
+  for (const email of activeEmails) {
+    const user = DB.users.find(u => u.email === email);
+    await sendEmail(EMAIL_CFG.templateAnnouncement, {
+      to_email:     email,
+      to_name:      user ? user.name.split(' ')[0] : 'Team',
+      author:       authorName,
+      ann_title:    announcement.title,
+      ann_body:     announcement.body.replace(/<[^>]+>/g,'').slice(0,200) + (announcement.body.length > 200 ? '…' : ''),
+      portal_url:   EMAIL_CFG.portalUrl + '#announcements',
+    });
+  }
+}
+
 // ============ DB ↔ JS FIELD TRANSFORMERS ============
 const _fromDB = {
   profiles:     r => ({ id: r.id, email: r.email, name: r.name, role: r.role, position: r.position||'',
@@ -1220,13 +1308,26 @@ const _fromDB = {
   shifts:       r => ({ id: r.id, userId: r.user_id, date: r.date, start: r.start_time, end: r.end_time,
                          position: r.position||'', notes: r.notes||'' }),
   announcements:r => ({ id: r.id, title: r.title, body: r.body, authorId: r.author_id,
-                         createdAt: r.created_at, pinned: r.pinned }),
+                         createdAt: r.created_at, pinned: r.pinned, likes: r.likes||[] }),
+  ann_comments: r => ({ id: r.id, announcementId: r.announcement_id, userId: r.user_id,
+                         userName: r.user_name||'', body: r.body, createdAt: r.created_at }),
+  tasting_audit:r => ({ id: r.id, tastingId: r.tasting_id, action: r.action,
+                         changedBy: r.changed_by, changedByName: r.changed_by_name||'',
+                         changedAt: r.changed_at, summary: r.summary||'',
+                         oldData: r.old_data, newData: r.new_data }),
   time_off:     r => ({ id: r.id, userId: r.user_id, startDate: r.start_date, endDate: r.end_date,
                          type: r.type, reason: r.reason||'', status: r.status,
                          reviewedBy: r.reviewed_by, reviewedAt: r.reviewed_at, reviewNote: r.review_note||'' }),
   tastings:     r => ({ id: r.id, date: r.date, day: r.day, from: r.from_time, to: r.to_time,
                          location: r.location||'', distributor: r.distributor||'', supplier: r.supplier||'',
-                         rep: r.rep||'', products: r.products||[] }),
+                         rep: r.rep||'', products: r.products||[],
+                         status: r.status||'approved', approvalNote: r.approval_note||'',
+                         suggestedDate: r.suggested_date||'', suggestedFrom: r.suggested_from||'',
+                         suggestedTo: r.suggested_to||'', suggestedLocation: r.suggested_location||'',
+                         submittedBy: r.submitted_by||null, submittedAt: r.submitted_at||null,
+                         source: r.source||'employee',
+                         requesterName: r.requester_name||'', requesterEmail: r.requester_email||'',
+                         requesterCompany: r.requester_company||'' }),
   timesheets:   r => ({ id: r.id, userId: r.user_id, weekStart: r.week_start, entries: r.entries||[],
                          status: r.status, submittedAt: r.submitted_at, reviewedBy: r.reviewed_by,
                          reviewedAt: r.reviewed_at, reviewNote: r.review_note||'' })
@@ -1240,13 +1341,25 @@ const _toDB = {
   shifts:       r => ({ id: r.id, user_id: r.userId, date: r.date, start_time: r.start, end_time: r.end,
                          position: r.position||'', notes: r.notes||'' }),
   announcements:r => ({ id: r.id, title: r.title, body: r.body, author_id: r.authorId,
-                         created_at: r.createdAt, pinned: r.pinned }),
+                         created_at: r.createdAt, pinned: r.pinned, likes: r.likes||[] }),
+  ann_comments: r => ({ id: r.id, announcement_id: r.announcementId, user_id: r.userId,
+                         user_name: r.userName||'', body: r.body }),
+  tasting_audit:r => ({ id: r.id, tasting_id: r.tastingId, action: r.action,
+                         changed_by: r.changedBy, changed_by_name: r.changedByName||'',
+                         summary: r.summary||'', old_data: r.oldData||null, new_data: r.newData||null }),
   time_off:     r => ({ id: r.id, user_id: r.userId, start_date: r.startDate, end_date: r.endDate,
                          type: r.type, reason: r.reason||'', status: r.status,
                          reviewed_by: r.reviewedBy||null, reviewed_at: r.reviewedAt||null, review_note: r.reviewNote||'' }),
   tastings:     r => ({ id: r.id, date: r.date, day: r.day, from_time: r.from, to_time: r.to,
                          location: r.location||'', distributor: r.distributor||'', supplier: r.supplier||'',
-                         rep: r.rep||'', products: r.products||[] }),
+                         rep: r.rep||'', products: r.products||[],
+                         status: r.status||'approved', approval_note: r.approvalNote||'',
+                         suggested_date: r.suggestedDate||'', suggested_from: r.suggestedFrom||'',
+                         suggested_to: r.suggestedTo||'', suggested_location: r.suggestedLocation||'',
+                         submitted_by: r.submittedBy||null, submitted_at: r.submittedAt||null,
+                         source: r.source||'employee',
+                         requester_name: r.requesterName||'', requester_email: r.requesterEmail||'',
+                         requester_company: r.requesterCompany||'' }),
   timesheets:   r => ({ id: r.id, user_id: r.userId, week_start: r.weekStart, entries: r.entries||[],
                          status: r.status, submitted_at: r.submittedAt||null, reviewed_by: r.reviewedBy||null,
                          reviewed_at: r.reviewedAt||null, review_note: r.reviewNote||'' })
@@ -1265,7 +1378,7 @@ function todayISO() {
 }
 
 async function loadFromSupabase() {
-  const [p, te, sh, an, to, ta, ts] = await Promise.all([
+  const [p, te, sh, an, to, ta, ts, ac, al] = await Promise.all([
     _sb.from('profiles').select('*'),
     _sb.from('time_entries').select('*'),
     _sb.from('shifts').select('*'),
@@ -1273,6 +1386,8 @@ async function loadFromSupabase() {
     _sb.from('time_off').select('*'),
     _sb.from('tastings').select('*'),
     _sb.from('timesheets').select('*'),
+    _sb.from('announcement_comments').select('*').order('created_at', { ascending: true }),
+    _sb.from('tasting_audit').select('*').order('changed_at', { ascending: false }),
   ]);
   DB = {
     users:         (p.data  ||[]).map(_fromDB.profiles),
@@ -1282,6 +1397,8 @@ async function loadFromSupabase() {
     timeOff:       (to.data ||[]).map(_fromDB.time_off),
     tastings:      (ta.data ||[]).map(_fromDB.tastings),
     timesheets:    (ts.data ||[]).map(_fromDB.timesheets),
+    annComments:   (ac.data ||[]).map(_fromDB.ann_comments),
+    tastingAudit:  (al.data ||[]).map(_fromDB.tasting_audit),
     sessionUserId: null
   };
 }
@@ -1406,6 +1523,18 @@ function fmtTime(iso) {
   const d = new Date(iso);
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
+// Extract local HH:MM from an ISO timestamp (avoids the UTC-offset display bug)
+function localHHMM(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+}
+// Extract local YYYY-MM-DD from an ISO timestamp
+function localDateStr(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
 function fmtTimeRange(startStr, endStr) {
   const fmt = t => {
     if (!t) return '';
@@ -1456,6 +1585,131 @@ function initials(name) {
 // ============ APP RENDERING ============
 let currentView = 'dashboard';
 let clockTickerInterval = null;
+
+// ============ SUPPLIER TASTING PORTAL (public, no auth) ============
+function renderSupplierPortal() {
+  const root = document.getElementById('root');
+  root.innerHTML = `
+    <div style="min-height:100vh; background: linear-gradient(135deg,#faf7f5 0%,#f5ede9 100%); display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding:40px 16px;">
+      <div style="width:100%; max-width:620px;">
+        <div style="text-align:center; margin-bottom:32px;">
+          <div style="font-size:32px; font-weight:900; color:var(--brand-red); letter-spacing:-1px;">SAVON NEXO</div>
+          <div style="font-size:13px; font-weight:700; color:var(--slate); letter-spacing:3px; margin-top:2px;">SUPPLIER TASTING REQUEST</div>
+        </div>
+        <div style="background:white; border-radius:16px; box-shadow:0 4px 24px rgba(0,0,0,0.1); padding:32px;" id="supplier-form-wrap">
+          <div style="font-size:18px; font-weight:800; color:var(--ink); margin-bottom:4px;">Request a Tasting Event</div>
+          <div style="font-size:13px; color:var(--slate); margin-bottom:24px;">Fill in your details below. Portia Sorden will review your request and get back to you within 2 business days.</div>
+          <form id="supplier-form" onsubmit="submitSupplierRequest(event)">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+              <div class="field">
+                <label class="label">Your Name *</label>
+                <input id="sr-name" required placeholder="John Smith">
+              </div>
+              <div class="field">
+                <label class="label">Your Email *</label>
+                <input id="sr-email" type="email" required placeholder="john@winery.com">
+              </div>
+              <div class="field">
+                <label class="label">Company / Winery *</label>
+                <input id="sr-company" required placeholder="Smith Family Wines">
+              </div>
+              <div class="field">
+                <label class="label">Distributor (if applicable)</label>
+                <input id="sr-distributor" placeholder="e.g. Premium Wines Ltd">
+              </div>
+              <div class="field">
+                <label class="label">Preferred Date *</label>
+                <input id="sr-date" type="date" required>
+              </div>
+              <div class="field">
+                <label class="label">Preferred Location</label>
+                <input id="sr-location" placeholder="e.g. Savon Nexo – Main Floor">
+              </div>
+              <div class="field">
+                <label class="label">From *</label>
+                <input id="sr-from" type="time" required>
+              </div>
+              <div class="field">
+                <label class="label">To *</label>
+                <input id="sr-to" type="time" required>
+              </div>
+            </div>
+            <div class="field" style="margin-top:4px;">
+              <label class="label">Products / Wines to Present (one per line)</label>
+              <textarea id="sr-products" rows="3" placeholder="e.g.\n2022 Shiraz Reserve\n2021 Chardonnay\nSparkling Brut NV"></textarea>
+            </div>
+            <div class="field">
+              <label class="label">Additional Notes</label>
+              <textarea id="sr-notes" rows="2" placeholder="Any special requirements, setup preferences..."></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary" style="width:100%; margin-top:8px; padding:14px;" id="sr-submit-btn">
+              🍷 Submit Tasting Request
+            </button>
+          </form>
+        </div>
+        <div style="text-align:center; margin-top:20px; font-size:12px; color:var(--warm-gray);">
+          Questions? Contact us at <a href="mailto:${EMAIL_CFG.fromEmail}" style="color:var(--brand-red);">${EMAIL_CFG.fromEmail}</a>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function submitSupplierRequest(e) {
+  e.preventDefault();
+  const btn = document.getElementById('sr-submit-btn');
+  btn.disabled = true; btn.textContent = 'Submitting…';
+
+  const dateVal   = document.getElementById('sr-date').value;
+  const fromVal   = document.getElementById('sr-from').value;
+  const toVal     = document.getElementById('sr-to').value;
+  const nameVal   = document.getElementById('sr-name').value.trim();
+  const emailVal  = document.getElementById('sr-email').value.trim();
+  const company   = document.getElementById('sr-company').value.trim();
+  const dist      = document.getElementById('sr-distributor').value.trim();
+  const loc       = document.getElementById('sr-location').value.trim() || 'TBD';
+  const rawProds  = document.getElementById('sr-products').value.trim();
+  const notes     = document.getElementById('sr-notes').value.trim();
+  const products  = rawProds ? rawProds.split('\n').map(s=>s.trim()).filter(Boolean) : [];
+
+  const data = {
+    id: uid('sr'),
+    date: dateVal, day: fmtDay(dateVal),
+    from: fromVal, to: toVal,
+    location: loc, distributor: dist, supplier: company, rep: nameVal,
+    products,
+    status: 'pending',
+    approvalNote: notes, suggestedDate: '', suggestedFrom: '', suggestedTo: '', suggestedLocation: '',
+    submittedBy: null, submittedAt: new Date().toISOString(),
+    source: 'supplier',
+    requesterName: nameVal, requesterEmail: emailVal, requesterCompany: company,
+  };
+
+  // Save to Supabase directly (no auth session for supplier portal)
+  try {
+    await _sb.from('tastings').insert(_toDB.tastings(data));
+  } catch(err) {
+    console.warn('Supabase insert error:', err);
+  }
+
+  // Email Portia
+  emailTastingApproval(data, nameVal + ' (' + company + ')');
+
+  // Show thank-you
+  document.getElementById('supplier-form-wrap').innerHTML = `
+    <div style="text-align:center; padding:20px 0;">
+      <div style="font-size:48px; margin-bottom:16px;">🍷</div>
+      <div style="font-size:22px; font-weight:800; color:var(--ink); margin-bottom:8px;">Request Received!</div>
+      <div style="font-size:14px; color:var(--slate); max-width:380px; margin:0 auto; line-height:1.6;">
+        Thank you, <strong>${escapeHtml(nameVal)}</strong>! Your tasting request for <strong>${fmtDate(dateVal)}</strong> has been submitted.
+        Portia Sorden will review it and reach out to <strong>${escapeHtml(emailVal)}</strong> within 2 business days.
+      </div>
+      <div style="margin-top:24px;">
+        <a href="?" style="color:var(--brand-red); font-size:13px; font-weight:600;">← Submit another request</a>
+      </div>
+    </div>
+  `;
+}
 
 function renderApp() {
   const root = document.getElementById('root');
@@ -1536,12 +1790,18 @@ function renderSidebar(u) {
   if (isManager || isAdminRole) {
     adminNav.push({ id: 'tsapprovals', icon: '✍', label: 'Timesheet Approvals' });
   }
+  // Tasting Approvals: managers with tasting access see pending requests
+  if ((isManager || isAdminRole) && hasTasting) {
+    const pendingTastings = DB.tastings.filter(t => t.status === 'pending').length;
+    adminNav.push({ id: 'tastingapprovals', icon: '🍷', label: 'Tasting Approvals' + (pendingTastings > 0 ? ` (${pendingTastings})` : '') });
+  }
   if (isAdminRole) {
     adminNav = adminNav.concat([
       { id: 'employees', icon: '👥', label: 'Employees' },
       { id: 'alltime', icon: '📊', label: 'Time Records' },
       { id: 'approvals', icon: '✓', label: 'Time-Off Approvals' },
-      { id: 'allshifts', icon: '🗓', label: 'Manage Shifts' }
+      { id: 'allshifts', icon: '🗓', label: 'Manage Shifts' },
+      { id: 'tastingaudit', icon: '📋', label: 'Tasting Audit Trail' }
     ]);
   }
 
@@ -1610,6 +1870,8 @@ function renderView() {
     case 'timeoff': renderTimeOff(host); break;
     case 'orgchart': renderOrgChart(host); break;
     case 'tastings': renderTastings(host); break;
+    case 'tastingapprovals': renderTastingApprovals(host); break;
+    case 'tastingaudit': isAdmin() ? renderTastingAudit(host) : renderDashboard(host); break;
     case 'profile': renderProfile(host); break;
     case 'tsapprovals': renderTimesheetApprovals(host); break;
     case 'employees': isAdmin() ? renderEmployees(host) : renderDashboard(host); break;
@@ -1860,21 +2122,30 @@ function renderMyTime(host) {
 
   // For each day, find entries (could be multiple = morning + afternoon)
   function dayPunches(date) {
-    const entries = DB.timeEntries.filter(e => e.userId === u.id && e.clockIn.slice(0,10) === date)
+    const entries = DB.timeEntries.filter(e => e.userId === u.id && localDateStr(e.clockIn) === date)
       .sort((a,b) => a.clockIn.localeCompare(b.clockIn));
-    const punches = { in1:'', out1:'', in2:'', out2:'', shift1: 0, shift2: 0 };
+    const isToday = date === todayISO();
+    const now = new Date();
+    const punches = { in1:'', out1:'', in2:'', out2:'', shift1: 0, shift2: 0, inProgress: false };
     if (entries[0]) {
-      punches.in1 = entries[0].clockIn.slice(11,16);
+      punches.in1 = localHHMM(entries[0].clockIn);
       if (entries[0].clockOut) {
-        punches.out1 = entries[0].clockOut.slice(11,16);
+        punches.out1 = localHHMM(entries[0].clockOut);
         punches.shift1 = (new Date(entries[0].clockOut) - new Date(entries[0].clockIn)) / 3600000;
+      } else if (isToday) {
+        // Still clocked in — show running total
+        punches.shift1 = (now - new Date(entries[0].clockIn)) / 3600000;
+        punches.inProgress = true;
       }
     }
     if (entries[1]) {
-      punches.in2 = entries[1].clockIn.slice(11,16);
+      punches.in2 = localHHMM(entries[1].clockIn);
       if (entries[1].clockOut) {
-        punches.out2 = entries[1].clockOut.slice(11,16);
+        punches.out2 = localHHMM(entries[1].clockOut);
         punches.shift2 = (new Date(entries[1].clockOut) - new Date(entries[1].clockIn)) / 3600000;
+      } else if (isToday) {
+        punches.shift2 = (now - new Date(entries[1].clockIn)) / 3600000;
+        punches.inProgress = true;
       }
     }
     punches.daily = punches.shift1 + punches.shift2;
@@ -1953,7 +2224,7 @@ function renderMyTime(host) {
           ${rows.map((row, i) => {
             const isToday = row.date === todayISO();
             const isPast = row.date < todayISO();
-            const shiftStr = row.daily > 0 ? row.daily.toFixed(2) : '';
+            const shiftStr = row.daily > 0 ? (row.inProgress ? row.daily.toFixed(2) + '…' : row.daily.toFixed(2)) : '';
             return `
               <tr class="kronos-row ${isToday ? 'kronos-row-today' : ''} ${isPast && !shiftStr ? 'kronos-row-missing' : ''}">
                 <td class="kronos-actions-cell">
@@ -2035,8 +2306,8 @@ function kronosAddPunch(date) {
 function kronosClearDay(date) {
   if (!confirm('Remove all punches for ' + fmtDate(date) + '?')) return;
   const u = currentUser();
-  const toDelete = DB.timeEntries.filter(e => e.userId === u.id && e.clockIn.slice(0,10) === date);
-  DB.timeEntries = DB.timeEntries.filter(e => !(e.userId === u.id && e.clockIn.slice(0,10) === date));
+  const toDelete = DB.timeEntries.filter(e => e.userId === u.id && localDateStr(e.clockIn) === date);
+  DB.timeEntries = DB.timeEntries.filter(e => !(e.userId === u.id && localDateStr(e.clockIn) === date));
   toDelete.forEach(e => _sbDelete('time_entries', e.id));
   renderView();
   showToast('Day cleared', 'success');
@@ -2052,13 +2323,13 @@ function submitTimesheet() {
     days.push(d.toISOString().slice(0,10));
   }
   const entries = days.map(date => {
-    const dayEntries = DB.timeEntries.filter(e => e.userId === u.id && e.clockIn.slice(0,10) === date).sort((a,b) => a.clockIn.localeCompare(b.clockIn));
+    const dayEntries = DB.timeEntries.filter(e => e.userId === u.id && localDateStr(e.clockIn) === date).sort((a,b) => a.clockIn.localeCompare(b.clockIn));
     return {
       date,
-      in1: dayEntries[0] ? dayEntries[0].clockIn.slice(11,16) : '',
-      out1: dayEntries[0] && dayEntries[0].clockOut ? dayEntries[0].clockOut.slice(11,16) : '',
-      in2: dayEntries[1] ? dayEntries[1].clockIn.slice(11,16) : '',
-      out2: dayEntries[1] && dayEntries[1].clockOut ? dayEntries[1].clockOut.slice(11,16) : '',
+      in1: dayEntries[0] ? localHHMM(dayEntries[0].clockIn) : '',
+      out1: dayEntries[0] && dayEntries[0].clockOut ? localHHMM(dayEntries[0].clockOut) : '',
+      in2: dayEntries[1] ? localHHMM(dayEntries[1].clockIn) : '',
+      out2: dayEntries[1] && dayEntries[1].clockOut ? localHHMM(dayEntries[1].clockOut) : '',
       payCode: (dayEntries[0] || dayEntries[1]) ? 'Regular' : 'Off',
       notes: ''
     };
@@ -2230,68 +2501,149 @@ function renderAnnouncements(host) {
   host.innerHTML = `
     <div class="page-header">
       <div>
-        <div class="page-title">Announcements</div>
-        <div class="page-subtitle">News and notes from management</div>
+        <div class="page-title">📣 Announcements</div>
+        <div class="page-subtitle">Team news and updates — everyone can post</div>
       </div>
-      ${isAdminUser ? '<div class="page-actions"><button class="btn btn-primary" onclick="openAnnouncementModal()">＋ New Announcement</button></div>' : ''}
+      <div class="page-actions"><button class="btn btn-primary" onclick="openAnnouncementModal()">＋ New Announcement</button></div>
     </div>
 
     ${sorted.length === 0
-      ? '<div class="card"><div class="empty"><div class="empty-icon">📣</div><div>No announcements yet.</div></div></div>'
+      ? '<div class="card"><div class="empty"><div class="empty-icon">📣</div><div>No announcements yet. Be the first to post!</div></div></div>'
       : sorted.map(a => {
         const author = DB.users.find(x => x.id === a.authorId);
+        const likes = a.likes || [];
+        const iLiked = likes.includes(u.id);
+        const comments = (DB.annComments||[]).filter(c => c.announcementId === a.id);
+        const canEdit = isAdminUser || a.authorId === u.id;
         return `
-          <div class="announcement ${a.pinned ? 'pinned' : ''}">
+          <div class="announcement ${a.pinned ? 'pinned' : ''}" id="ann-${a.id}">
             <div class="announcement-meta">
               <div class="announcement-title">${a.pinned ? '<span class="pin-marker">📌</span>' : ''}${escapeHtml(a.title)}</div>
               <div class="announcement-date">${fmtDate(a.createdAt)}</div>
             </div>
-            <div class="announcement-body">${escapeHtml(a.body)}</div>
-            <div class="announcement-author">— ${escapeHtml(author ? author.name : 'Unknown')}, ${escapeHtml(author ? author.position : '')}</div>
-            ${isAdminUser ? `
-              <div style="margin-top: 10px; display: flex; gap: 8px;">
-                <button class="btn btn-sm btn-ghost" onclick="togglePin('${a.id}')">${a.pinned ? '📌 Unpin' : '📍 Pin'}</button>
-                <button class="btn btn-sm btn-ghost" onclick="editAnnouncement('${a.id}')">Edit</button>
-                <button class="btn btn-sm btn-ghost" onclick="deleteAnnouncement('${a.id}')" style="color: var(--danger);">Delete</button>
-              </div>` : ''}
+            <div class="announcement-body" style="white-space:pre-wrap;">${escapeHtml(a.body)}</div>
+            <div class="announcement-author">— ${escapeHtml(author ? author.name : 'Unknown')}${author&&author.position ? ', ' + escapeHtml(author.position) : ''}</div>
+
+            <div style="display:flex; gap:8px; margin-top:12px; align-items:center; flex-wrap:wrap; border-top:1px solid var(--border); padding-top:10px;">
+              <button class="btn btn-sm ${iLiked ? 'btn-primary' : 'btn-ghost'}" onclick="likeAnnouncement('${a.id}')" style="gap:4px;">
+                👍 ${likes.length > 0 ? likes.length : ''} ${iLiked ? 'Liked' : 'Like'}
+              </button>
+              <button class="btn btn-sm btn-ghost" onclick="toggleAnnComments('${a.id}')">
+                💬 ${comments.length > 0 ? comments.length + ' ' : ''}Comment${comments.length !== 1 ? 's' : ''}
+              </button>
+              ${canEdit ? `
+                ${isAdminUser ? `<button class="btn btn-sm btn-ghost" onclick="togglePin('${a.id}')">${a.pinned ? '📌 Unpin' : '📍 Pin'}</button>` : ''}
+                <button class="btn btn-sm btn-ghost" onclick="editAnnouncement('${a.id}')">✏️ Edit</button>
+                <button class="btn btn-sm btn-ghost" onclick="deleteAnnouncement('${a.id}')" style="color:var(--danger);">🗑 Delete</button>
+              ` : ''}
+            </div>
+
+            <div id="comments-${a.id}" style="display:none; margin-top:12px;">
+              ${comments.map(c => {
+                const cu = DB.users.find(x => x.id === c.userId);
+                return `
+                  <div style="display:flex; gap:10px; margin-bottom:10px; align-items:flex-start;">
+                    <div class="avatar" style="width:30px;height:30px;font-size:11px;flex-shrink:0;">${initials(c.userName||'?')}</div>
+                    <div style="flex:1; background:var(--bg-soft); border-radius:8px; padding:8px 12px;">
+                      <div style="font-weight:600; font-size:12px;">${escapeHtml(c.userName||'Unknown')} <span style="font-weight:400; color:var(--warm-gray);">${fmtDate((c.createdAt||'').slice(0,10))}</span></div>
+                      <div style="font-size:13px; margin-top:2px; white-space:pre-wrap;">${escapeHtml(c.body)}</div>
+                    </div>
+                    ${(isAdminUser || c.userId === u.id) ? `<button class="btn btn-sm btn-ghost" onclick="deleteAnnComment('${c.id}','${a.id}')" style="color:var(--danger); padding:2px 6px;">✕</button>` : ''}
+                  </div>`;
+              }).join('')}
+              <div style="display:flex; gap:8px; margin-top:8px;">
+                <input id="comment-input-${a.id}" class="form-input" placeholder="Write a comment…" style="flex:1; padding:8px 12px; font-size:13px;" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitAnnComment('${a.id}');}">
+                <button class="btn btn-primary btn-sm" onclick="submitAnnComment('${a.id}')">Post</button>
+              </div>
+            </div>
           </div>
         `;
       }).join('')}
   `;
 }
 
+function toggleAnnComments(annId) {
+  const el = document.getElementById('comments-' + annId);
+  if (!el) return;
+  const showing = el.style.display !== 'none';
+  el.style.display = showing ? 'none' : 'block';
+  if (!showing) { setTimeout(() => { const inp = document.getElementById('comment-input-' + annId); if (inp) inp.focus(); }, 50); }
+}
+
+function likeAnnouncement(annId) {
+  const u = currentUser();
+  const a = DB.announcements.find(x => x.id === annId);
+  if (!a) return;
+  const likes = [...(a.likes||[])];
+  const idx = likes.indexOf(u.id);
+  if (idx >= 0) likes.splice(idx, 1); else likes.push(u.id);
+  a.likes = likes;
+  _sbUpdate('announcements', { likes }, annId);
+  // Re-render just this card's like button without full page refresh
+  renderView();
+}
+
+function submitAnnComment(annId) {
+  const u = currentUser();
+  const inp = document.getElementById('comment-input-' + annId);
+  if (!inp) return;
+  const body = inp.value.trim();
+  if (!body) return;
+  const comment = { id: uid('ac'), announcementId: annId, userId: u.id, userName: u.name, body, createdAt: new Date().toISOString() };
+  DB.annComments = [...(DB.annComments||[]), comment];
+  _sbPush('announcement_comments', _toDB.ann_comments(comment));
+  renderView();
+  // Re-open the comments section after re-render
+  setTimeout(() => { toggleAnnComments(annId); }, 50);
+}
+
+function deleteAnnComment(commentId, annId) {
+  if (!confirm('Delete this comment?')) return;
+  DB.annComments = (DB.annComments||[]).filter(c => c.id !== commentId);
+  _sbDelete('announcement_comments', commentId);
+  renderView();
+  setTimeout(() => { toggleAnnComments(annId); }, 50);
+}
+
 function openAnnouncementModal(id) {
   const ann = id ? DB.announcements.find(a => a.id === id) : null;
+  const u = currentUser();
+  const isAdminUser = u.role === 'admin';
   showModal({
-    title: ann ? 'Edit Announcement' : 'New Announcement',
+    title: ann ? 'Edit Announcement' : '📣 New Announcement',
     body: `
       <form id="announcement-form" onsubmit="saveAnnouncement(event, '${id || ''}')">
-        <div class="field"><label class="label">Title</label><input id="ann-title" required value="${ann ? escapeHtml(ann.title) : ''}" placeholder="Title"></div>
+        <div class="field"><label class="label">Title</label><input id="ann-title" required value="${ann ? escapeHtml(ann.title) : ''}" placeholder="e.g. Updated store hours, Team meeting..."></div>
         <div class="field" style="margin-top:14px;"><label class="label">Message</label><textarea id="ann-body" required rows="6" placeholder="Write your announcement...">${ann ? escapeHtml(ann.body) : ''}</textarea></div>
-        <label style="display:flex; align-items:center; gap:8px; margin-top:14px;"><input type="checkbox" id="ann-pinned" style="width:auto;" ${ann && ann.pinned ? 'checked' : ''}> <span style="font-size:13px;">Pin this announcement to the top</span></label>
+        ${isAdminUser ? `<label style="display:flex; align-items:center; gap:8px; margin-top:14px;"><input type="checkbox" id="ann-pinned" style="width:auto;" ${ann && ann.pinned ? 'checked' : ''}> <span style="font-size:13px;">📌 Pin this announcement to the top</span></label>` : '<input type="hidden" id="ann-pinned">'}
+        <div style="background:var(--info-light); color:var(--info); padding:10px; border-radius:8px; font-size:12px; margin-top:12px;">
+          📧 All active employees will receive an email notification when you post.
+        </div>
       </form>
     `,
-    submitLabel: 'Save Announcement',
+    submitLabel: ann ? 'Save Changes' : 'Post Announcement',
     submitFn: () => document.getElementById('announcement-form').requestSubmit()
   });
 }
 
-
 function saveAnnouncement(e, id) {
   e.preventDefault();
+  const u = currentUser();
   const title = document.getElementById('ann-title').value.trim();
   const body = document.getElementById('ann-body').value.trim();
-  const pinned = document.getElementById('ann-pinned').checked;
+  const pinnedEl = document.getElementById('ann-pinned');
+  const pinned = pinnedEl ? pinnedEl.checked : false;
   if (id) {
     const a = DB.announcements.find(x => x.id === id);
     if (a) { a.title = title; a.body = body; a.pinned = pinned; }
     _sbUpdate('announcements', _toDB.announcements({...DB.announcements.find(x=>x.id===id)}), id);
     showToast('Announcement updated', 'success');
   } else {
-    const ann = { id: uid('an'), title, body, authorId: currentUser().id, createdAt: new Date().toISOString(), pinned };
+    const ann = { id: uid('an'), title, body, authorId: u.id, createdAt: new Date().toISOString(), pinned, likes: [] };
     DB.announcements.push(ann);
     _sbPush('announcements', _toDB.announcements(ann));
-    showToast('Announcement posted', 'success');
+    emailAnnouncement(ann, u.name);
+    showToast('Announcement posted — team notified by email 📧', 'success');
   }
   closeModal();
   renderView();
@@ -2497,6 +2849,7 @@ function renderTastingTable() {
   const today = todayISO(); const wk = getWeekRange(); const nk = getWeekRange(1);
 
   let items = DB.tastings.filter(t => {
+    if (t.status === 'pending' || t.status === 'denied') return false; // hide unapproved
     if (loc && t.location !== loc) return false;
     if (tf === 'upcoming' && t.date < today) return false;
     if (tf === 'this-week' && (t.date < wk.start || t.date > wk.end)) return false;
@@ -2605,11 +2958,16 @@ function openTastingModal(id) {
 
 function saveTasting(e, id) {
   e.preventDefault();
+  const u = currentUser();
   const products = [];
   for (let i = 1; i <= 6; i++) {
     const v = document.getElementById('t-p' + i).value.trim();
     if (v) products.push(v);
   }
+  const existing = id ? DB.tastings.find(x => x.id === id) : null;
+  // Portia (the tasting approver) can add directly; everyone else goes through approval
+  const isPortia = u.email && u.email.toLowerCase() === EMAIL_CFG.approverEmail.toLowerCase();
+  const newStatus = id && existing ? existing.status : (isPortia ? 'approved' : 'pending');
   const data = {
     id: id || uid('t'),
     date: document.getElementById('t-date').value,
@@ -2620,17 +2978,33 @@ function saveTasting(e, id) {
     distributor: document.getElementById('t-distributor').value.trim(),
     supplier: document.getElementById('t-supplier').value.trim(),
     rep: document.getElementById('t-rep').value.trim(),
-    products
+    products,
+    status: newStatus,
+    approvalNote: existing ? existing.approvalNote : '',
+    suggestedDate: '', suggestedFrom: '', suggestedTo: '', suggestedLocation: '',
+    submittedBy: id && existing ? existing.submittedBy : u.id,
+    submittedAt: id && existing ? existing.submittedAt : new Date().toISOString(),
+    source: id && existing ? (existing.source || 'employee') : 'employee',
+    requesterName: id && existing ? (existing.requesterName || '') : '',
+    requesterEmail: id && existing ? (existing.requesterEmail || '') : '',
+    requesterCompany: id && existing ? (existing.requesterCompany || '') : '',
   };
   if (id) {
     const idx = DB.tastings.findIndex(x => x.id === id);
     if (idx >= 0) DB.tastings[idx] = data;
     _sbUpsert('tastings', _toDB.tastings(data));
+    logTastingAudit(data.id, 'updated', existing, data);
     showToast('Tasting updated', 'success');
   } else {
     DB.tastings.push(data);
     _sbPush('tastings', _toDB.tastings(data));
-    showToast('Tasting added', 'success');
+    logTastingAudit(data.id, 'created', null, data);
+    if (isPortia) {
+      showToast('Tasting added to schedule ✓', 'success');
+    } else {
+      emailTastingApproval(data, u.name);
+      showToast('Tasting submitted for approval — Portia has been notified 📧', 'info');
+    }
   }
   closeModal();
   renderView();
@@ -2640,10 +3014,268 @@ function deleteTasting(id) {
   const t = DB.tastings.find(x => x.id === id);
   if (!t) return;
   if (!confirm('Delete tasting on ' + fmtDate(t.date) + ' at ' + t.location + '?')) return;
+  logTastingAudit(id, 'deleted', t, null);
   DB.tastings = DB.tastings.filter(x => x.id !== id);
   _sbDelete('tastings', id);
   renderView();
   showToast('Tasting deleted', 'success');
+}
+
+// ============ TASTING AUDIT HELPERS ============
+function logTastingAudit(tastingId, action, oldData, newData) {
+  const u = currentUser();
+  const entry = {
+    id: uid('ta'),
+    tastingId,
+    action,
+    changedBy: u.id,
+    changedByName: u.name,
+    changedAt: new Date().toISOString(),
+    summary: buildAuditSummary(action, oldData, newData),
+    oldData: oldData ? JSON.parse(JSON.stringify(oldData)) : null,
+    newData: newData ? JSON.parse(JSON.stringify(newData)) : null,
+  };
+  DB.tastingAudit.unshift(entry);
+  _sbPush('tasting_audit', _toDB.tasting_audit(entry));
+}
+
+function buildAuditSummary(action, old, nw) {
+  if (action === 'created') return `Added: ${nw.date} at ${nw.location}`;
+  if (action === 'deleted') return `Deleted: ${old.date} at ${old.location}`;
+  if (action === 'approved') return `Approved: ${nw.date} at ${nw.location}`;
+  if (action === 'denied') return `Denied: ${nw.date} at ${nw.location}` + (nw.approvalNote ? ` — "${nw.approvalNote}"` : '');
+  if (action === 'rescheduled') return `Reschedule suggested: ${old.date} → ${nw.suggestedDate} at ${nw.location}`;
+  if (action === 'updated' && old && nw) {
+    const changes = [];
+    if (old.date !== nw.date) changes.push(`date ${old.date}→${nw.date}`);
+    if (old.location !== nw.location) changes.push(`location "${old.location}"→"${nw.location}"`);
+    if (old.from !== nw.from || old.to !== nw.to) changes.push(`time ${old.from}-${old.to}→${nw.from}-${nw.to}`);
+    if (old.distributor !== nw.distributor) changes.push(`distributor changed`);
+    if (old.supplier !== nw.supplier) changes.push(`supplier changed`);
+    return changes.length ? 'Changed: ' + changes.join('; ') : 'Updated (no field changes detected)';
+  }
+  return action;
+}
+
+// ============ TASTING APPROVALS PAGE ============
+function renderTastingApprovals(host) {
+  const u = currentUser();
+  const canApprove = u.role === 'admin' || u.role === 'manager';
+  const pending = DB.tastings.filter(t => t.status === 'pending').sort((a,b) => a.date.localeCompare(b.date));
+  const denied  = DB.tastings.filter(t => t.status === 'denied').sort((a,b) => b.submittedAt||'').slice(0,20);
+
+  const cardHtml = (t, showActions) => {
+    const submitter = DB.users.find(x => x.id === t.submittedBy);
+    const isSupplier = t.source === 'supplier';
+    const sourceBadge = isSupplier
+      ? `<span style="display:inline-block;background:#e8f4fd;color:#1a6fa5;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:700;margin-left:8px;">🏭 SUPPLIER</span>`
+      : `<span style="display:inline-block;background:var(--brand-red-soft);color:var(--brand-red);border-radius:20px;padding:2px 9px;font-size:11px;font-weight:700;margin-left:8px;">👤 EMPLOYEE</span>`;
+    const requesterInfo = isSupplier ? `
+      <div style="font-size:12px; color:var(--slate); margin-top:6px; background:#f0f7ff; padding:6px 10px; border-radius:6px;">
+        <strong>Requester:</strong> ${escapeHtml(t.requesterName||'—')}
+        ${t.requesterCompany?` · <strong>Company:</strong> ${escapeHtml(t.requesterCompany)}`:''}
+        ${t.requesterEmail?` · <a href="mailto:${escapeHtml(t.requesterEmail)}" style="color:var(--brand-red);">${escapeHtml(t.requesterEmail)}</a>`:''}
+      </div>` : (submitter ? `<div style="font-size:12px; color:var(--warm-gray); margin-top:6px;">Submitted by <strong>${escapeHtml(submitter.name)}</strong> on ${fmtDate((t.submittedAt||'').slice(0,10))}</div>` : '');
+    return `
+      <div class="card" style="margin-bottom:14px; border-left: 4px solid ${t.status==='pending'?'var(--warning)':t.status==='denied'?'var(--danger)':'var(--success)'};">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:10px;">
+          <div style="flex:1; min-width:0;">
+            <div style="font-weight:700; font-size:16px;">${fmtDate(t.date)} <span style="color:var(--slate); font-weight:400; font-size:13px;">${t.day||''}</span>${sourceBadge}</div>
+            <div style="font-size:13px; color:var(--slate); margin-top:2px;">${fmtTimeRange(t.from,t.to)} · <strong>${escapeHtml(t.location)}</strong></div>
+            <div style="font-size:13px; margin-top:4px;">${escapeHtml(t.distributor)||'—'} / ${escapeHtml(t.supplier)||'—'}${t.rep?' · Rep: '+escapeHtml(t.rep):''}</div>
+            ${t.products&&t.products.length?`<div style="font-size:12px; color:var(--brand-red); margin-top:3px;">${t.products.map(escapeHtml).join(', ')}</div>`:''}
+            ${requesterInfo}
+            ${t.approvalNote?`<div style="font-size:12px; color:var(--danger); margin-top:4px; background:var(--danger-light); padding:4px 8px; border-radius:6px;">📝 ${escapeHtml(t.approvalNote)}</div>`:''}
+            ${t.suggestedDate?`<div style="font-size:12px; color:var(--warning); margin-top:4px; background:var(--warning-light); padding:4px 8px; border-radius:6px;">📅 Suggested reschedule: ${fmtDate(t.suggestedDate)} ${t.suggestedFrom?fmtTimeRange(t.suggestedFrom,t.suggestedTo):''}${t.suggestedLocation?' · '+escapeHtml(t.suggestedLocation):''}</div>`:''}
+          </div>
+          ${showActions && canApprove ? `
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start;">
+              <button class="btn btn-success btn-sm" onclick="tastingApprovalAction('${t.id}','approve')">✓ Approve</button>
+              <button class="btn btn-secondary btn-sm" onclick="tastingApprovalAction('${t.id}','reschedule')">📅 Suggest Date/Location</button>
+              <button class="btn btn-danger btn-sm" onclick="tastingApprovalAction('${t.id}','deny')">✗ Deny</button>
+            </div>
+          ` : ''}
+        </div>
+      </div>`;
+  };
+
+  host.innerHTML = `
+    <div class="page-header">
+      <div>
+        <div class="page-title">🍷 Tasting Approvals</div>
+        <div class="page-subtitle">Review tasting requests from employees and suppliers</div>
+      </div>
+    </div>
+
+    <div style="font-size:13px; background:var(--info-light); color:var(--info); padding:10px 14px; border-radius:8px; margin-bottom:20px;">
+      ℹ️ Only <strong>approved</strong> tastings appear on the main Tasting Schedule. Pending and denied tastings are managed here.
+    </div>
+
+    <div style="font-weight:700; font-size:16px; margin-bottom:12px;">
+      ⏳ Pending Approval <span style="font-weight:400; font-size:13px; color:var(--slate);">(${pending.length})</span>
+    </div>
+    ${pending.length === 0
+      ? '<div class="card"><div class="empty"><div class="empty-icon">✅</div><div>No pending tasting requests</div></div></div>'
+      : pending.map(t => cardHtml(t, true)).join('')}
+
+    <div style="font-weight:700; font-size:16px; margin:24px 0 12px;">
+      ✗ Recently Denied <span style="font-weight:400; font-size:13px; color:var(--slate);">(${denied.length})</span>
+    </div>
+    ${denied.length === 0
+      ? '<div class="card"><div class="empty"><div>No denied requests</div></div></div>'
+      : denied.map(t => cardHtml(t, false)).join('')}
+  `;
+}
+
+function tastingApprovalAction(id, action) {
+  const t = DB.tastings.find(x => x.id === id);
+  if (!t) return;
+  const u = currentUser();
+
+  if (action === 'approve') {
+    const old = JSON.parse(JSON.stringify(t));
+    t.status = 'approved';
+    t.approvalNote = '';
+    t.suggestedDate = ''; t.suggestedFrom = ''; t.suggestedTo = ''; t.suggestedLocation = '';
+    _sbUpdate('tastings', _toDB.tastings(t), id);
+    logTastingAudit(id, 'approved', old, t);
+    // Notify requester — supplier by email field, employee by their profile email
+    const recipientEmail = t.source === 'supplier' ? t.requesterEmail : (t.submittedBy ? (DB.users.find(x=>x.id===t.submittedBy)||{}).email : null);
+    const recipientName  = t.source === 'supplier' ? (t.requesterName||'Supplier') : (t.submittedBy ? (DB.users.find(x=>x.id===t.submittedBy)||{}).name : null);
+    if (recipientEmail) {
+      sendEmail(EMAIL_CFG.templateAnnouncement, {
+        to_email: recipientEmail,
+        to_name:  recipientName || 'Team',
+        subject:  '✅ Tasting request approved — ' + fmtDate(t.date),
+        message:  `Great news! The tasting request for ${fmtDate(t.date)} (${fmtTimeRange(t.from,t.to)}) at ${t.location} has been approved and added to the Savon Nexo tasting schedule.\n\nIf you have any questions, please contact us at ${EMAIL_CFG.fromEmail}.`,
+        button_label: 'View Tasting Schedule',
+        button_url:   EMAIL_CFG.portalUrl + '#tastings',
+      });
+    }
+    showToast('Tasting approved ✓', 'success');
+    renderView();
+
+  } else if (action === 'deny') {
+    showModal({
+      title: '✗ Deny Tasting Request',
+      body: `<div class="field"><label class="label">Reason for denial (sent to requester)</label><textarea id="deny-note" rows="3" placeholder="e.g. Date is already fully booked..."></textarea></div>`,
+      submitLabel: 'Confirm Denial',
+      submitFn: () => {
+        const note = document.getElementById('deny-note').value.trim();
+        const old = JSON.parse(JSON.stringify(t));
+        t.status = 'denied';
+        t.approvalNote = note;
+        _sbUpdate('tastings', _toDB.tastings(t), id);
+        logTastingAudit(id, 'denied', old, t);
+        const denyEmail = t.source === 'supplier' ? t.requesterEmail : (t.submittedBy ? (DB.users.find(x=>x.id===t.submittedBy)||{}).email : null);
+        const denyName  = t.source === 'supplier' ? (t.requesterName||'Supplier') : (t.submittedBy ? (DB.users.find(x=>x.id===t.submittedBy)||{}).name : null);
+        if (denyEmail) {
+          sendEmail(EMAIL_CFG.templateAnnouncement, {
+            to_email: denyEmail,
+            to_name:  denyName || 'Team',
+            subject:  'Update on your tasting request — ' + fmtDate(t.date),
+            message:  `Thank you for your tasting request for ${fmtDate(t.date)}. Unfortunately we are unable to accommodate this request at this time.${note ? '\n\nNote from Portia: ' + note : ''}\n\nPlease feel free to reach out to us at ${EMAIL_CFG.fromEmail} to find an alternative.`,
+            button_label: '',
+            button_url:   '',
+          });
+        }
+        closeModal();
+        showToast('Tasting denied', 'error');
+        renderView();
+      }
+    });
+
+  } else if (action === 'reschedule') {
+    showModal({
+      title: '📅 Suggest Reschedule',
+      body: `
+        <p style="color:var(--slate); margin-bottom:14px;">Suggest an alternative date, time, or location. The requester will see your note.</p>
+        <div class="field"><label class="label">Suggested Date</label><input type="date" id="sug-date" value="${t.date}"></div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div class="field"><label class="label">From</label><input type="time" id="sug-from" value="${t.from||''}"></div>
+          <div class="field"><label class="label">To</label><input type="time" id="sug-to" value="${t.to||''}"></div>
+        </div>
+        <div class="field"><label class="label">Suggested Location (optional)</label><input id="sug-loc" placeholder="Leave blank to keep original" value="${t.suggestedLocation||t.location||''}"></div>
+        <div class="field"><label class="label">Note to requester</label><textarea id="sug-note" rows="2" placeholder="e.g. Original date conflicts with another event...">${t.approvalNote||''}</textarea></div>
+      `,
+      submitLabel: 'Send Suggestion',
+      submitFn: () => {
+        const sugDate = document.getElementById('sug-date').value;
+        const sugFrom = document.getElementById('sug-from').value;
+        const sugTo   = document.getElementById('sug-to').value;
+        const sugLoc  = document.getElementById('sug-loc').value.trim();
+        const note    = document.getElementById('sug-note').value.trim();
+        if (!sugDate) { showToast('Please enter a suggested date', 'error'); return; }
+        const old = JSON.parse(JSON.stringify(t));
+        t.status = 'pending';
+        t.suggestedDate = sugDate;
+        t.suggestedFrom = sugFrom;
+        t.suggestedTo   = sugTo;
+        t.suggestedLocation = sugLoc;
+        t.approvalNote  = note;
+        _sbUpdate('tastings', _toDB.tastings(t), id);
+        logTastingAudit(id, 'rescheduled', old, t);
+        const reschedEmail = t.source === 'supplier' ? t.requesterEmail : (t.submittedBy ? (DB.users.find(x=>x.id===t.submittedBy)||{}).email : null);
+        const reschedName  = t.source === 'supplier' ? (t.requesterName||'Supplier') : (t.submittedBy ? (DB.users.find(x=>x.id===t.submittedBy)||{}).name : null);
+        if (reschedEmail) {
+          sendEmail(EMAIL_CFG.templateAnnouncement, {
+            to_email: reschedEmail,
+            to_name:  reschedName || 'Team',
+            subject:  '📅 Reschedule suggestion for your tasting — ' + fmtDate(t.date),
+            message:  `Thank you for your tasting request. Portia has suggested an alternative time:\n\nDate: ${fmtDate(sugDate)}\nTime: ${fmtTimeRange(sugFrom,sugTo)}${sugLoc?'\nLocation: '+sugLoc:''}\n\n${note?'Note: '+note+'\n\n':''}Please reply to ${EMAIL_CFG.fromEmail} to confirm this works for you.`,
+            button_label: '',
+            button_url:   '',
+          });
+        }
+        closeModal();
+        showToast('Reschedule suggestion sent', 'info');
+        renderView();
+      }
+    });
+  }
+}
+
+// ============ TASTING AUDIT TRAIL VIEW ============
+function renderTastingAudit(host) {
+  const auditLog = (DB.tastingAudit || []);
+  const actionColor = { created:'var(--success)', updated:'var(--info)', deleted:'var(--danger)', approved:'var(--success)', denied:'var(--danger)', rescheduled:'var(--warning)' };
+  const actionLabel = { created:'➕ Created', updated:'✏️ Updated', deleted:'🗑 Deleted', approved:'✅ Approved', denied:'✗ Denied', rescheduled:'📅 Reschedule' };
+
+  host.innerHTML = `
+    <div class="page-header">
+      <div>
+        <div class="page-title">📋 Tasting Audit Trail</div>
+        <div class="page-subtitle">Full history of every change made to tasting records</div>
+      </div>
+    </div>
+
+    ${auditLog.length === 0
+      ? '<div class="card"><div class="empty"><div class="empty-icon">📋</div><div>No audit records yet. Changes to tastings will appear here.</div></div></div>'
+      : `<div class="table-wrap">
+          <div class="table-header">
+            <div class="table-title">Change Log</div>
+            <div class="table-meta">${auditLog.length} record${auditLog.length===1?'':'s'}</div>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead><tr>
+                <th>When</th><th>Action</th><th>Who</th><th>Summary</th><th>Tasting ID</th>
+              </tr></thead>
+              <tbody>
+                ${auditLog.map(e => `
+                  <tr>
+                    <td style="white-space:nowrap; font-size:12px; color:var(--slate);">${e.changedAt ? new Date(e.changedAt).toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}) : '—'}</td>
+                    <td><span style="display:inline-block; padding:2px 8px; border-radius:20px; font-size:11px; font-weight:600; background:${(actionColor[e.action]||'var(--slate)') + '22'}; color:${actionColor[e.action]||'var(--slate)'};">${actionLabel[e.action]||e.action}</span></td>
+                    <td style="font-size:13px; font-weight:500;">${escapeHtml(e.changedByName||'—')}</td>
+                    <td style="font-size:13px;">${escapeHtml(e.summary||'—')}</td>
+                    <td style="font-size:11px; color:var(--warm-gray); font-family:monospace;">${e.tastingId||'—'}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>`}
+  `;
 }
 
 // ============ IMPORT FROM GOOGLE SHEET (Excel) ============
@@ -3009,7 +3641,7 @@ function resetAllTimeFilter() { allTimeFilter = { userId: '', dateFrom: '', date
 function getFilteredEntries() {
   return DB.timeEntries.filter(e => {
     if (allTimeFilter.userId && e.userId !== allTimeFilter.userId) return false;
-    const d = e.clockIn.slice(0, 10);
+    const d = localDateStr(e.clockIn);
     if (allTimeFilter.dateFrom && d < allTimeFilter.dateFrom) return false;
     if (allTimeFilter.dateTo && d > allTimeFilter.dateTo) return false;
     return true;
@@ -3044,10 +3676,10 @@ function openTimeEntryModal(id) {
               ${DB.users.filter(u => u.active).map(u => `<option value="${u.id}" ${e && e.userId === u.id ? 'selected' : ''}>${escapeHtml(u.name)}</option>`).join('')}
             </select>
           </div>
-          <div class="field"><label class="label">Clock In Date</label><input type="date" id="te-cin-date" required value="${e ? e.clockIn.slice(0,10) : todayISO()}"></div>
-          <div class="field"><label class="label">Clock In Time</label><input type="time" id="te-cin-time" required value="${e ? e.clockIn.slice(11,16) : '09:00'}"></div>
-          <div class="field"><label class="label">Clock Out Date</label><input type="date" id="te-cout-date" value="${e && e.clockOut ? e.clockOut.slice(0,10) : todayISO()}"></div>
-          <div class="field"><label class="label">Clock Out Time</label><input type="time" id="te-cout-time" value="${e && e.clockOut ? e.clockOut.slice(11,16) : '17:00'}"></div>
+          <div class="field"><label class="label">Clock In Date</label><input type="date" id="te-cin-date" required value="${e ? localDateStr(e.clockIn) : todayISO()}"></div>
+          <div class="field"><label class="label">Clock In Time</label><input type="time" id="te-cin-time" required value="${e ? localHHMM(e.clockIn) : '09:00'}"></div>
+          <div class="field"><label class="label">Clock Out Date</label><input type="date" id="te-cout-date" value="${e && e.clockOut ? localDateStr(e.clockOut) : todayISO()}"></div>
+          <div class="field"><label class="label">Clock Out Time</label><input type="time" id="te-cout-time" value="${e && e.clockOut ? localHHMM(e.clockOut) : '17:00'}"></div>
           <div class="field full"><label class="label">Note</label><input id="te-note" value="${e ? escapeHtml(e.note) : ''}" placeholder="Optional note..."></div>
         </div>
       </form>
@@ -3337,13 +3969,13 @@ function renderTimesheet(host) {
       const d = new Date(r.start + 'T12:00:00');
       d.setDate(d.getDate() + i);
       const date = d.toISOString().slice(0,10);
-      const dayEntries = DB.timeEntries.filter(e => e.userId === u.id && e.clockIn.slice(0,10) === date).sort((a,b) => a.clockIn.localeCompare(b.clockIn));
+      const dayEntries = DB.timeEntries.filter(e => e.userId === u.id && localDateStr(e.clockIn) === date).sort((a,b) => a.clockIn.localeCompare(b.clockIn));
       days.push({
         date,
-        in1: dayEntries[0] ? dayEntries[0].clockIn.slice(11,16) : '',
-        out1: dayEntries[0] && dayEntries[0].clockOut ? dayEntries[0].clockOut.slice(11,16) : '',
-        in2: dayEntries[1] ? dayEntries[1].clockIn.slice(11,16) : '',
-        out2: dayEntries[1] && dayEntries[1].clockOut ? dayEntries[1].clockOut.slice(11,16) : '',
+        in1: dayEntries[0] ? localHHMM(dayEntries[0].clockIn) : '',
+        out1: dayEntries[0] && dayEntries[0].clockOut ? localHHMM(dayEntries[0].clockOut) : '',
+        in2: dayEntries[1] ? localHHMM(dayEntries[1].clockIn) : '',
+        out2: dayEntries[1] && dayEntries[1].clockOut ? localHHMM(dayEntries[1].clockOut) : '',
         payCode: (dayEntries[0] || dayEntries[1]) ? 'Regular' : 'Off',
         notes: ''
       });
@@ -3352,9 +3984,8 @@ function renderTimesheet(host) {
   }
   function calcHours(entry) {
     function parse(s) { if (!s) return null; const p = s.split(':').map(Number); return p[0] * 60 + p[1]; }
-    const ms1 = parse(entry.out1) != null && parse(entry.in1) != null ? parse(entry.out1) - parse(entry.in1) : 0;
-    const ms2 = parse(entry.out2) != null && parse(entry.in2) != null ? parse(entry.out2) - parse(entry.in2) : 0;
-    return Math.max(0, (ms1 + ms2)) / 60;
+    function diff(a, b) { const pa = parse(a), pb = parse(b); if (pa == null || pb == null) return 0; return Math.abs(pb - pa); }
+    return (diff(entry.in1, entry.out1) + diff(entry.in2, entry.out2)) / 60;
   }
   let total = 0;
   ts.entries.forEach(e => { total += calcHours(e); });
@@ -3434,11 +4065,12 @@ function updateTsEntry(idx, field, value) {
   if (!DB.timesheets) DB.timesheets = [];
   if (draft.id) {
     const existing = DB.timesheets.find(t => t.id === draft.id);
-    if (existing) { existing.entries[idx][field] = value; saveDB(); }
+    if (existing) { existing.entries[idx][field] = value; _sbUpsert('timesheets', _toDB.timesheets(existing)); }
   } else {
     draft.id = uid('ws');
-    DB.timesheets.push(Object.assign({}, draft));
-    saveDB();
+    const newTs = Object.assign({}, draft);
+    DB.timesheets.push(newTs);
+    _sbPush('timesheets', _toDB.timesheets(newTs));
     window.__currentTimesheetDraft = DB.timesheets[DB.timesheets.length - 1];
   }
   clearTimeout(window.__tsRedrawTimer);
@@ -3461,7 +4093,7 @@ function submitWeeklyTimesheet() {
   ts.reviewedBy = null;
   ts.reviewedAt = null;
   ts.reviewNote = '';
-  saveDB();
+  _sbUpsert('timesheets', _toDB.timesheets(ts));
   renderView();
   const u = currentUser();
   const mgr = u.managerId ? DB.users.find(x => x.id === u.managerId) : null;
@@ -3471,7 +4103,11 @@ function submitWeeklyTimesheet() {
 function cancelTimesheetSubmission(id) {
   if (!confirm('Withdraw this submission?')) return;
   const ts = DB.timesheets.find(t => t.id === id);
-  if (ts) { ts.status = 'draft'; saveDB(); renderView(); showToast('Submission withdrawn', 'success'); }
+  if (ts) {
+    ts.status = 'draft'; ts.reviewedBy = null; ts.reviewedAt = null; ts.reviewNote = '';
+    _sbUpsert('timesheets', _toDB.timesheets(ts));
+    renderView(); showToast('Submission withdrawn', 'success');
+  }
 }
 
 function exportWeeklyTimesheet() {
@@ -3480,9 +4116,8 @@ function exportWeeklyTimesheet() {
   const u = currentUser();
   const rows = draft.entries.map(e => {
     function parse(s) { if (!s) return null; const p = s.split(':').map(Number); return p[0]*60 + p[1]; }
-    const m1 = (parse(e.out1) != null && parse(e.in1) != null) ? parse(e.out1) - parse(e.in1) : 0;
-    const m2 = (parse(e.out2) != null && parse(e.in2) != null) ? parse(e.out2) - parse(e.in2) : 0;
-    const hrs = Math.max(0, m1 + m2) / 60;
+    function diff(a, b) { const pa = parse(a), pb = parse(b); if (pa == null || pb == null) return 0; return Math.abs(pb - pa); }
+    const hrs = (diff(e.in1, e.out1) + diff(e.in2, e.out2)) / 60;
     return { Date: e.date, Day: fmtDay(e.date), 'Pay Code': e.payCode, 'Morning In': e.in1, 'Morning Out': e.out1, 'Afternoon In': e.in2, 'Afternoon Out': e.out2, Hours: hrs.toFixed(2), Notes: e.notes || '' };
   });
   downloadExcel(rows, 'Timesheet_' + u.name.replace(/\s/g,'_') + '_' + draft.weekStart + '.xlsx', 'Weekly Timesheet');
@@ -3502,9 +4137,8 @@ function renderTimesheetApprovals(host) {
     let h = 0;
     ts.entries.forEach(e => {
       function parse(s) { if (!s) return null; const p = s.split(':').map(Number); return p[0]*60+p[1]; }
-      const m1 = (parse(e.out1) != null && parse(e.in1) != null) ? parse(e.out1) - parse(e.in1) : 0;
-      const m2 = (parse(e.out2) != null && parse(e.in2) != null) ? parse(e.out2) - parse(e.in2) : 0;
-      h += Math.max(0, m1 + m2) / 60;
+      function diff(a, b) { const pa = parse(a), pb = parse(b); if (pa == null || pb == null) return 0; return Math.abs(pb - pa); }
+      h += (diff(e.in1, e.out1) + diff(e.in2, e.out2)) / 60;
     });
     return h;
   }
@@ -3564,9 +4198,8 @@ function viewTimesheetDetails(id) {
   const emp = DB.users.find(u => u.id === ts.userId);
   function calcHours(e) {
     function parse(s) { if (!s) return null; const p = s.split(':').map(Number); return p[0]*60+p[1]; }
-    const m1 = (parse(e.out1) != null && parse(e.in1) != null) ? parse(e.out1) - parse(e.in1) : 0;
-    const m2 = (parse(e.out2) != null && parse(e.in2) != null) ? parse(e.out2) - parse(e.in2) : 0;
-    return Math.max(0, m1 + m2) / 60;
+    function diff(a, b) { const pa = parse(a), pb = parse(b); if (pa == null || pb == null) return 0; return Math.abs(pb - pa); }
+    return (diff(e.in1, e.out1) + diff(e.in2, e.out2)) / 60;
   }
   let total = 0;
   let body = '<div style="margin-bottom:14px; color:var(--slate); font-size:13px;"><strong>Employee:</strong> ' + escapeHtml(emp ? emp.name : '-') + ' - ' + escapeHtml(emp ? emp.position : '') + '<br><strong>Submitted:</strong> ' + fmtDate(ts.submittedAt) + '</div>';
@@ -3768,13 +4401,19 @@ function changePassword(e) {
 
 // ============ BOOT ============
 async function init() {
+  // Supplier portal: no auth required, show public form
+  if (window.location.hash === '#supplier') {
+    hideLoadingOverlay();
+    renderSupplierPortal();
+    return;
+  }
   showLoadingOverlay('Loading Savon Nexo Portal…');
   const { data: { session } } = await _sb.auth.getSession();
   if (session) {
     await loadFromSupabase();
     DB.sessionUserId = session.user.id;
   } else {
-    DB = { users:[], timeEntries:[], shifts:[], announcements:[], timeOff:[], tastings:[], timesheets:[], sessionUserId: null };
+    DB = { users:[], timeEntries:[], shifts:[], announcements:[], timeOff:[], tastings:[], timesheets:[], annComments:[], tastingAudit:[], sessionUserId: null };
   }
   hideLoadingOverlay();
   renderApp();
