@@ -1248,10 +1248,10 @@ const _sb = supabase.createClient(
 // Sign up free at https://www.emailjs.com → connect Zoho SMTP → create templates
 // Then fill in the values below.
 const EMAIL_CFG = {
-  publicKey:            'YOUR_EMAILJS_PUBLIC_KEY',      // Account → API Keys
-  serviceId:            'YOUR_EMAILJS_SERVICE_ID',      // Email Services tab
-  templateApproval:     'YOUR_TEMPLATE_ID_APPROVAL',    // template for tasting approval requests
-  templateAnnouncement: 'YOUR_TEMPLATE_ID_ANNOUNCEMENT',// template for announcement blasts
+  publicKey:            'uxG0M93-CtcIs6_7g',      // Account → API Keys
+  serviceId:            'service_8tz9s7f',      // Email Services tab
+  templateApproval:     'template_yzpwgeq',    // template for tasting approval requests
+  templateAnnouncement: 'template_kcr7zae',// template for announcement blasts
   fromEmail:            'info@savonnexo.com',
   approverEmail:        'portia.sorden@savonnexo.com',  // Portia's email — update if different
   portalUrl:            'https://portal.savonnexo.com', // live URL
@@ -1285,15 +1285,16 @@ async function emailTastingApproval(tasting, submitterName) {
 // Send announcement email blast to all active employees
 async function emailAnnouncement(announcement, authorName) {
   const activeEmails = DB.users.filter(u => u.active && u.email).map(u => u.email);
+  const preview = announcement.body.replace(/<[^>]+>/g,'').slice(0,200) + (announcement.body.length > 200 ? '…' : '');
   for (const email of activeEmails) {
     const user = DB.users.find(u => u.email === email);
     await sendEmail(EMAIL_CFG.templateAnnouncement, {
       to_email:     email,
       to_name:      user ? user.name.split(' ')[0] : 'Team',
-      author:       authorName,
-      ann_title:    announcement.title,
-      ann_body:     announcement.body.replace(/<[^>]+>/g,'').slice(0,200) + (announcement.body.length > 200 ? '…' : ''),
-      portal_url:   EMAIL_CFG.portalUrl + '#announcements',
+      subject:      announcement.title,
+      message:      `${authorName} posted a new announcement:\n\n${preview}`,
+      button_label: 'Read Full Announcement',
+      button_url:   EMAIL_CFG.portalUrl + '#announcements',
     });
   }
 }
@@ -3060,7 +3061,8 @@ function buildAuditSummary(action, old, nw) {
 // ============ TASTING APPROVALS PAGE ============
 function renderTastingApprovals(host) {
   const u = currentUser();
-  const canApprove = u.role === 'admin' || u.role === 'manager';
+  const canApprove = u.role === 'admin' || u.role === 'manager' ||
+    (u.email && u.email.toLowerCase() === EMAIL_CFG.approverEmail.toLowerCase());
   const pending = DB.tastings.filter(t => t.status === 'pending').sort((a,b) => a.date.localeCompare(b.date));
   const denied  = DB.tastings.filter(t => t.status === 'denied').sort((a,b) => b.submittedAt||'').slice(0,20);
 
