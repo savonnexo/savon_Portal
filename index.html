@@ -2972,9 +2972,10 @@ function saveTasting(e, id) {
     if (v) products.push(v);
   }
   const existing = id ? DB.tastings.find(x => x.id === id) : null;
-  // Portia (the tasting approver) can add directly; everyone else goes through approval
+  // Admins and Portia (the tasting approver) add directly; everyone else goes through approval
   const isPortia = u.email && u.email.toLowerCase() === EMAIL_CFG.approverEmail.toLowerCase();
-  const newStatus = id && existing ? existing.status : (isPortia ? 'approved' : 'pending');
+  const canAddDirect = isPortia || u.role === 'admin';
+  const newStatus = id && existing ? existing.status : (canAddDirect ? 'approved' : 'pending');
   const data = {
     id: id || uid('t'),
     date: document.getElementById('t-date').value,
@@ -3006,7 +3007,7 @@ function saveTasting(e, id) {
     DB.tastings.push(data);
     _sbPush('tastings', _toDB.tastings(data));
     logTastingAudit(data.id, 'created', null, data);
-    if (isPortia) {
+    if (canAddDirect) {
       showToast('Tasting added to schedule ✓', 'success');
     } else {
       emailTastingApproval(data, u.name);
