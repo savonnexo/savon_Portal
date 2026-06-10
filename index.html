@@ -1253,7 +1253,7 @@ const EMAIL_CFG = {
   templateApproval:     'template_yzpwgeq',    // template for tasting approval requests
   templateAnnouncement: 'template_kcr7zae',// template for announcement blasts
   fromEmail:            'info@savonnexo.com',
-  approverEmail:        'pasorden@savonnexo.com',  // Portia's email — update if different
+  approverEmail:        'portia.sorden@savonnexo.com',  // Portia's email — update if different
   portalUrl:            'https://portal.savonnexo.com', // live URL
 };
 // Init EmailJS (safe to call even before templates are configured)
@@ -1321,7 +1321,7 @@ const _fromDB = {
                          reviewedBy: r.reviewed_by, reviewedAt: r.reviewed_at, reviewNote: r.review_note||'' }),
   tastings:     r => ({ id: r.id, date: r.date, day: r.day, from: r.from_time, to: r.to_time,
                          location: r.location||'', distributor: r.distributor||'', supplier: r.supplier||'',
-                         rep: r.rep||'', products: r.products||[],
+                         type: r.type||'tasting', products: r.products||[],
                          status: r.status||'approved', approvalNote: r.approval_note||'',
                          suggestedDate: r.suggested_date||'', suggestedFrom: r.suggested_from||'',
                          suggestedTo: r.suggested_to||'', suggestedLocation: r.suggested_location||'',
@@ -1353,7 +1353,7 @@ const _toDB = {
                          reviewed_by: r.reviewedBy||null, reviewed_at: r.reviewedAt||null, review_note: r.reviewNote||'' }),
   tastings:     r => ({ id: r.id, date: r.date, day: r.day, from_time: r.from, to_time: r.to,
                          location: r.location||'', distributor: r.distributor||'', supplier: r.supplier||'',
-                         rep: r.rep||'', products: r.products||[],
+                         type: r.type||'tasting', products: r.products||[],
                          status: r.status||'approved', approval_note: r.approvalNote||'',
                          suggested_date: r.suggestedDate||'', suggested_from: r.suggestedFrom||'',
                          suggested_to: r.suggestedTo||'', suggested_location: r.suggestedLocation||'',
@@ -2858,7 +2858,7 @@ function renderTastingTable() {
     if (tf === 'past' && t.date >= today) return false;
     if (tf === 'this-month' && !t.date.startsWith(today.slice(0,7))) return false;
     if (search) {
-      const hay = (t.location + ' ' + t.distributor + ' ' + t.supplier + ' ' + t.rep + ' ' + (t.products || []).join(' ')).toLowerCase();
+      const hay = (t.location + ' ' + t.distributor + ' ' + t.supplier + ' ' + (t.type||'') + ' ' + (t.products || []).join(' ')).toLowerCase();
       if (!hay.includes(search)) return false;
     }
     return true;
@@ -2882,7 +2882,7 @@ function renderTastingTable() {
         <table>
           <thead><tr>
             <th>Date</th><th>Day</th><th>Time</th><th>Location</th>
-            <th>Distributor</th><th>Supplier</th><th>Rep</th><th>Products</th>
+            <th>Distributor</th><th>Supplier</th><th>Type</th><th>Products</th>
             <th>Status</th><th></th>
           </tr></thead>
           <tbody>
@@ -2905,7 +2905,7 @@ function renderTastingTable() {
                     <td><strong>${escapeHtml(t.location)}</strong></td>
                     <td>${escapeHtml(t.distributor) || '—'}</td>
                     <td>${escapeHtml(t.supplier) || '—'}</td>
-                    <td>${escapeHtml(t.rep) || '—'}</td>
+                    <td>${(() => { const tp = (t.type||'tasting').toLowerCase(); const colors = {tasting:'var(--brand-red-soft);color:var(--brand-red)', class:'var(--info-light);color:var(--info)', others:'var(--bg-soft);color:var(--slate)'}; const c = colors[tp]||colors.others; return `<span style="background:${c};padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;text-transform:uppercase;">${escapeHtml(t.type||'Tasting')}</span>`; })()}</td>
                     <td style="max-width:280px;">${products.map(p => '<span class="product-pill">' + escapeHtml(p) + '</span>').join(' ') || '—'}</td>
                     <td><span class="badge ${status.cls}">${status.label}</span></td>
                     <td><button class="btn btn-sm btn-ghost" onclick="openTastingModal('${t.id}')">Edit</button> <button class="btn btn-sm btn-ghost" onclick="deleteTasting('${t.id}')" style="color:var(--danger);">×</button></td>
@@ -2940,7 +2940,13 @@ function openTastingModal(id) {
             <datalist id="t-dist-list">${distributors.map(l => `<option>${escapeHtml(l)}</option>`).join('')}</datalist>
           </div>
           <div class="field"><label class="label">Supplier</label><input id="t-supplier" value="${t ? escapeHtml(t.supplier) : ''}"></div>
-          <div class="field full"><label class="label">Rep Contacted By</label><input id="t-rep" value="${t ? escapeHtml(t.rep) : ''}"></div>
+          <div class="field full"><label class="label">Event Type</label>
+            <select id="t-type">
+              <option value="tasting" ${(!t || (t.type||'tasting')==='tasting') ? 'selected' : ''}>🍷 Tasting</option>
+              <option value="class"   ${t && t.type==='class'   ? 'selected' : ''}>🎓 Class</option>
+              <option value="others"  ${t && t.type==='others'  ? 'selected' : ''}>📌 Others</option>
+            </select>
+          </div>
         </div>
         <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border);">
           <label class="label">Products (up to 6)</label>
@@ -2978,7 +2984,7 @@ function saveTasting(e, id) {
     location: document.getElementById('t-location').value.trim(),
     distributor: document.getElementById('t-distributor').value.trim(),
     supplier: document.getElementById('t-supplier').value.trim(),
-    rep: document.getElementById('t-rep').value.trim(),
+    type: document.getElementById('t-type').value,
     products,
     status: newStatus,
     approvalNote: existing ? existing.approvalNote : '',
@@ -3084,7 +3090,7 @@ function renderTastingApprovals(host) {
           <div style="flex:1; min-width:0;">
             <div style="font-weight:700; font-size:16px;">${fmtDate(t.date)} <span style="color:var(--slate); font-weight:400; font-size:13px;">${t.day||''}</span>${sourceBadge}</div>
             <div style="font-size:13px; color:var(--slate); margin-top:2px;">${fmtTimeRange(t.from,t.to)} · <strong>${escapeHtml(t.location)}</strong></div>
-            <div style="font-size:13px; margin-top:4px;">${escapeHtml(t.distributor)||'—'} / ${escapeHtml(t.supplier)||'—'}${t.rep?' · Rep: '+escapeHtml(t.rep):''}</div>
+            <div style="font-size:13px; margin-top:4px;">${escapeHtml(t.distributor)||'—'} / ${escapeHtml(t.supplier)||'—'}${t.type?' · <span style="background:var(--brand-red-soft);color:var(--brand-red);padding:1px 7px;border-radius:999px;font-size:11px;font-weight:700;">'+escapeHtml(t.type).toUpperCase()+'</span>':''}</div>
             ${t.products&&t.products.length?`<div style="font-size:12px; color:var(--brand-red); margin-top:3px;">${t.products.map(escapeHtml).join(', ')}</div>`:''}
             ${requesterInfo}
             ${t.approvalNote?`<div style="font-size:12px; color:var(--danger); margin-top:4px; background:var(--danger-light); padding:4px 8px; border-radius:6px;">📝 ${escapeHtml(t.approvalNote)}</div>`:''}
@@ -3318,9 +3324,8 @@ function importTastingSheet(input) {
         // Headers in row 2, data from row 3 (0-indexed: headers at index 1, data from index 2)
         const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, cellDates: true, defval: '' });
         const headers = rows[1] || [];
-        // Detect if this sheet has a Rep column (Edwardsville has Rep at col 7, products at 8-13)
-        const hasRep = (headers[7] || '').toString().toLowerCase().includes('rep');
-        const prodStart = hasRep ? 8 : 7;
+        // Products start at col 7 (rep column removed)
+        const prodStart = 7;
 
         rows.slice(2).forEach(row => {
           const rawDate = row[0];
@@ -3333,7 +3338,6 @@ function importTastingSheet(input) {
           const to    = excelTime(row[4] instanceof Date ? row[4] : row[4]);
           const dist  = (row[5] || '').trim();
           const supp  = (row[6] || '').trim();
-          const rep   = hasRep ? (row[7] || '').trim() : '';
           const prods = [];
           for (let p = prodStart; p < prodStart + 6; p++) {
             const v = (row[p] || '').toString().trim();
@@ -3344,13 +3348,18 @@ function importTastingSheet(input) {
             id: stableId(date, loc, from),
             date, day: day || fmtDay(date),
             from, to,
-            location: loc, distributor: dist, supplier: supp, rep,
+            location: loc, distributor: dist, supplier: supp, type: 'tasting',
             products: prods
           });
         });
       });
 
       if (parsed.length === 0) { showToast('No valid rows found in file', 'error'); return; }
+
+      // Deduplicate by stable ID — keep last occurrence so re-imports update in place
+      const seen = new Map();
+      parsed.forEach(r => seen.set(r.id, r));
+      const deduped = Array.from(seen.values());
 
       // Show confirmation modal
       showModal({
@@ -3368,7 +3377,7 @@ function importTastingSheet(input) {
             </div>
           </div>`,
         submitLabel: 'Import ' + parsed.length + ' Tastings',
-        submitFn: () => { closeModal(); doImportTastings(parsed); }
+        submitFn: () => { closeModal(); doImportTastings(deduped); }
       });
     } catch(err) {
       showToast('Error reading file: ' + err.message, 'error');
@@ -3408,7 +3417,7 @@ function exportTastings(which) {
   const rows = items.map(t => ({
     'Date': t.date, 'Day': t.day || fmtDay(t.date), 'Location': t.location,
     'From': t.from, 'To': t.to, 'Distributor': t.distributor, 'Supplier': t.supplier,
-    'Rep Contacted By': t.rep,
+    'Type': t.type||'tasting',
     'Product #1': (t.products||[])[0]||'', 'Product #2': (t.products||[])[1]||'',
     'Product #3': (t.products||[])[2]||'', 'Product #4': (t.products||[])[3]||'',
     'Product #5': (t.products||[])[4]||'', 'Product #6': (t.products||[])[5]||''
@@ -3444,7 +3453,7 @@ function openExportTastingLocation() {
       const rows = items.map(t => ({
         'Date': t.date, 'Day': t.day || fmtDay(t.date), 'Location': t.location,
         'From': t.from, 'To': t.to, 'Distributor': t.distributor, 'Supplier': t.supplier,
-        'Rep Contacted By': t.rep,
+        'Type': t.type||'tasting',
         'Product #1': (t.products||[])[0]||'', 'Product #2': (t.products||[])[1]||'',
         'Product #3': (t.products||[])[2]||'', 'Product #4': (t.products||[])[3]||'',
         'Product #5': (t.products||[])[4]||'', 'Product #6': (t.products||[])[5]||''
